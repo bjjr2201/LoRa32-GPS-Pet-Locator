@@ -1,0 +1,144 @@
+#include "heltec.h"
+#include "images.h"
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+#include <SPI.h>
+
+static const int RXPin = 17, TXPin = 2; // GPS transmisson lines
+static const uint32_t GPSBaud = 9600; // Default baud rate for NEO-7M GPS module
+
+TinyGPSPlus tinyGPS;  // Create a tinyGPS object
+SoftwareSerial ssGPS(RXPin, TXPin); // Assigns pins to GPS module
+
+#define BAND    915E6  //you can set band here directly,e.g. 868E6 (Europe),915E6 (North America)
+
+unsigned int counter = 0;
+String rssi = "RSSI --";  // Signal strength measured in dB
+String packSize = "--";
+String packet ;
+
+void logo()
+{
+  Heltec.display->clear();
+  Heltec.display->drawXbm(0,5,logo_width,logo_height,logo_bits);
+  Heltec.display->display();
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  ssGPS.begin(GPSBaud);
+  Serial.println(F("Ublox NEO-7M GPS Module Test"));
+  delay(1000);
+    
+   //WIFI Kit series V1 not support Vext control
+  Heltec.begin(true /*DisplayEnable Enable*/, true /*Heltec.Heltec.Heltec.LoRa Disable*/, true /*Serial Enable*/, true /*PABOOST Enable*/, BAND /*long BAND*/);
+  Heltec.display->init();
+  Heltec.display->flipScreenVertically();  
+  Heltec.display->setFont(ArialMT_Plain_10);
+  logo();
+  delay(1500);
+  Heltec.display->clear(); 
+  Heltec.display->drawString(0, 0, "LoRa32 GPS Pet Locator");
+  Heltec.display->display();
+  delay(1000);
+}
+
+void gps_OLED()
+{
+  Heltec.display->clear();
+  Heltec.display->drawString(0, 0,"Lat: " +(String(tinyGPS.location.lat(), 6)));
+  Heltec.display->drawString(0, 10,"Lng: " +String(tinyGPS.location.lng(), 6));
+  Heltec.display->drawString(0, 20,"Date: " +String(tinyGPS.date.month()) +("/")
+  +String(tinyGPS.date.day()) +("/") +String(tinyGPS.date.year()));
+  Heltec.display->drawString(0, 30,"Time: " +String(tinyGPS.time.hour()-6) +(":")
+  +String(tinyGPS.time.minute()) +(":") +String(tinyGPS.time.second()));
+  Heltec.display->display();
+}
+
+void loop()
+{
+  Heltec.display->clear();
+  Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
+  Heltec.display->setFont(ArialMT_Plain_10);
+  gps_OLED();
+  
+  // print position, altitude, speed, time/date, and satellites:
+  printGPSInfo();
+
+  // "Smart delay" looks for GPS data while the Arduino's not doing anything else
+  smartDelay(1000);
+  // send packet
+  LoRa.beginPacket();
+  
+/*
+ * LoRa.setTxPower(txPower,RFOUT_pin);
+ * txPower -- 0 ~ 20
+ * RFOUT_pin could be RF_PACONFIG_PASELECT_PABOOST or RF_PACONFIG_PASELECT_RFO
+ *   - RF_PACONFIG_PASELECT_PABOOST -- LoRa single output via PABOOST, maximum output 20dBm
+ *   - RF_PACONFIG_PASELECT_RFO     -- LoRa single output via RFO_HF / RFO_LF, maximum output 14dBm
+*/
+  LoRa.setTxPower(20,RF_PACONFIG_PASELECT_PABOOST);
+  LoRa.print("Lat: " +String(tinyGPS.location.lat(), 6));
+  LoRa.print("Lng: " +String(tinyGPS.location.lng(), 6));
+  LoRa.print("Date: " +String(tinyGPS.date.value()));
+  LoRa.print("Time: " +String(tinyGPS.time.value()));
+  LoRa.endPacket();
+  LoRa.sleep();
+
+  counter++;
+  digitalWrite(LED, HIGH);   // turn the LED on (HIGH is the voltage level)
+  delay(1000);                       // wait for a second
+  digitalWrite(LED, LOW);    // turn the LED off by making the voltage LOW
+  delay(1000);                       // wait for a second  
+}
+
+void printGPSInfo()
+{
+  // Print latitude, longitude, altitude in feet, course, speed, date, time,
+  // and the number of visible satellites.
+  Serial.print("Lat: "); Serial.println(tinyGPS.location.lat(), 6);
+  Serial.print("Long: "); Serial.println(tinyGPS.location.lng(), 6);
+  Serial.print("Date: "); printDate();
+  Serial.print("Time: "); printTime(); 
+  Serial.println();
+}
+
+// This custom version of delay() ensures that the tinyGPS object
+// is being "fed". From the TinyGPS++ examples.
+static void smartDelay(unsigned long ms)
+{
+  unsigned long start = millis();
+  do
+  {
+    // If data has come in from the GPS module
+    while (ssGPS.available())
+      tinyGPS.encode(ssGPS.read()); // Send it to the encode function
+    // tinyGPS.encode(char) continues to "load" the tinyGPS object with new
+    // data coming in from the GPS module. As full NMEA strings begin to come in
+    // the tinyGPS library will be able to start parsing them for pertinent info
+  } while (millis() - start < ms);
+}
+
+// printDate() formats the date into mm/dd/yy.
+void printDate()
+{
+  Serial.print(tinyGPS.date.month());
+  Serial.print("/");
+  Serial.print(tinyGPS.date.day());
+  Serial.print("/");
+  Serial.println(tinyGPS.date.year());
+}
+
+// printTime() formats the time into "hh:mm:ss", and prints leading 0's
+// where they're called for.
+void printTime()
+{
+  Serial.print(tinyGPS.time.hour()-8);
+  Serial.print(":");
+  if (tinyGPS.time.minute() < 10) Serial.print('0');
+  Serial.print(tinyGPS.time.minute());
+  Serial.print(":");
+  if (tinyGPS.time.second() < 10) Serial.print('0');
+  Serial.println(tinyGPS.time.second());
+}
