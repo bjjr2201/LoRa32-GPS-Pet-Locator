@@ -1,36 +1,36 @@
+/****************************************
+ * Include Libraries
+ ****************************************/
 #include "heltec.h" 
 #include "images.h"
+#include <BlynkSimpleEsp32.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
 
+/****************************************
+ * Configure WiFi Connection
+ ****************************************/
+
+// You should get Auth Token in the Blynk App.
+// Go to the Project Settings (nut icon).
+char auth[] = "--q67pop95loaeUqg_qLHAtcbxD2KY9C"; // Your Blynk Auth Token
+char ssid[]= "Flex"; // Your network name
+char pass[]= "f!ghtJunkies";  //Your password
+
+/****************************************
+ * Define Constants
+ ****************************************/
 
 #define BAND    915E6  //you can set band here directly,e.g. 868E6,915E6
+#define BLYNK_PRINT Serial
 
-String rssi = "RSSI --";
-String packSize = "--";
+String rssi = "RSSI --";  // Signal strength measured in dB
+String packSize = "--";   // Packet size measured in bytes
 String packet;
-  
-void logo(){
-  Heltec.display->clear();
-  Heltec.display->drawXbm(0,5,logo_width,logo_height,logo_bits);
-  Heltec.display->display();
-}
 
-void LoRaData(){
-  Heltec.display->clear();
-  Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
-  Heltec.display->setFont(ArialMT_Plain_10);
-  Heltec.display->drawString(0 , 15 , "Received "+ packSize + " bytes");
-  Heltec.display->drawStringMaxWidth(0 , 26 , 128, packet);
-  Heltec.display->drawString(0, 0, rssi);  
-  Heltec.display->display();
-}
-
-void cbk(int packetSize) {
-  packet ="";
-  packSize = String(packetSize,DEC);
-  for (int i = 0; i < packetSize; i++) { packet += (char) LoRa.read(); }
-  rssi = "RSSI " + String(LoRa.packetRssi(), DEC) ;
-  LoRaData();
-}
+/****************************************
+ * Main Function Setup
+ ****************************************/
 
 void setup() { 
    //WIFI Kit series V1 not support Vext control
@@ -51,8 +51,43 @@ void setup() {
   LoRa.receive();
 }
 
+/****************************************
+ * Loop Function Setup
+ ****************************************/
+
 void loop() {
   int packetSize = LoRa.parsePacket();
   if (packetSize) { cbk(packetSize);  }
   delay(10);
+}
+
+/****************************************
+ * Auxiliar Functions
+ ****************************************/
+
+// Draws logos from the hexadecimal code included in the "image.h" file.
+void logo(){
+  Heltec.display->clear();
+  Heltec.display->drawXbm(0,5,logo_width,logo_height,logo_bits);
+  Heltec.display->display();
+}
+
+// Display received data
+void LoRaData(){
+  Heltec.display->clear();
+  Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
+  Heltec.display->setFont(ArialMT_Plain_10);
+  Heltec.display->drawString(0 , 15 , "Received "+ packSize + " bytes");
+  Heltec.display->drawStringMaxWidth(0 , 26 , 128, packet);
+  Heltec.display->drawString(0, 0, rssi);  
+  Heltec.display->display();
+}
+
+// Unpack received data
+void cbk(int packetSize) {
+  packet ="";
+  packSize = String(packetSize,DEC);
+  for (int i = 0; i < packetSize; i++) { packet += (char) LoRa.read(); }
+  rssi = "RSSI " + String(LoRa.packetRssi(), DEC) ;
+  LoRaData();
 }
