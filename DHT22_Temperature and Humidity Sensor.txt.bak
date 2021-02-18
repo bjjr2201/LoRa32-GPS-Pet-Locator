@@ -1,0 +1,54 @@
+/* 
+* DHT22: Temperature and hHmidity sensor
+*/
+
+//Libraries
+#include <DHT.h>;
+
+//Constants
+#define DHTPIN 23     // We're currently using pin 23 of the HelTec LoRa32 MCU
+#define DHTTYPE DHT22   // Change to "DHT11" if that is the sensor you're using
+DHT dht(DHTPIN, DHTTYPE); /* Initializes the pin and type */
+//DHT dht(DHTPIN,DHTTYPE, 90);	/* Third parameter is threshold setting for 240 Hz chipset */
+
+
+//Variables
+float hum;  //Stores humidity value
+float temp; //Stores temperature value
+
+void setup()
+{
+  Serial.begin(9600);
+  dht.begin();
+}
+
+void loop()
+{
+    delay(2000);
+    //Read data and store it to variables hum and temp
+    h = dht.readHumidity();
+	c = dht.readTemperature(); /* reads temperature in Celsius */
+    f = dht.readTemperature(true); /* Automatically converts to Fahrenheit */
+    //Print temp and humidity values to serial monitor
+    Serial.print("Humidity: ");
+    Serial.print(hum);
+    Serial.print(" %, Temp: ");
+    Serial.print(temp);
+    Serial.println(" Celsius");
+    Serial.print(temp1);
+    Serial.println(" Fahrenheit");
+    delay(2000); //Delay 2 sec.
+	
+	  // Check if any reads failed and exit early (to try again):
+  if (isnan(h) || isnan(c) || isnan(f)) {	/* isnan means "is not a number" */
+    Serial.println("Failed to read from DHT sensor!");
+    return;
+  }
+  // Compute heat index in Fahrenheit (default):
+  float hif = dht.computeHeatIndex(c, h);
+  // Compute heat index in Celsius:
+  float hic = dht.computeHeatIndex(c, h, false);
+
+}
+
+   
