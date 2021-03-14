@@ -1,42 +1,77 @@
 /****************************************
  * Include Libraries
  ****************************************/
+#include "Arduino.h"
+#include <ESP32AnalogRead.h>
+#include "DHT.h"
 #include "heltec.h"
 #include "images.h"
+#include "ThingSpeak.h"
 #include <BlynkSimpleEsp32.h>
+#include <driver/adc.h>
 #include <Ethernet.h>
 #include <SoftwareSerial.h>
 #include <SPI.h>
 #include <TinyGPS++.h>
+//#include <TinyGsmClient.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 
-/****************************************
- * Configure WiFi Connection
- ****************************************/
-// You should get Auth Token in the Blynk App.
-// Go to the Project Settings (nut icon).
-char auth[] = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // Your Blynk Auth Token
-char ssid[]= "YourNetwork"; // Your network name
-char pass[]= "YourPassword";  //Your password
+ /****************************************
+  * Configure WiFi Connection
+  ****************************************/
+  // You should get Auth Token in the Blynk App.
+  // Go to the Project Settings (nut icon).
+char auth[] = ""; // Your Blynk Auth Token
+char SSID[] = ""; // Your network name
+char pass[] = "";  //Your password
+int status = WL_IDLE_STATUS;
+
+//Insert your GPRS APN credentials in the following variables:
+const char apn[] = ""; // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
+const char gprsUser[] = ""; // GPRS User
+const char gprsPass[] = ""; // GPRS Password
+
+// ThingSpeak information
+char thingSpeakAddress[] = "";
+const int port = 80;                        // server port number
+#define CHANNEL_ID 
+#define CHANNEL_API_KEY ""
+#define READ_API_KEY ""
+
+//Ubidots
+#define TOKEN "" //Ubidots TOKEN
+#define MQTT_CLIENT_NAME ""
 
 /****************************************
  * Define Constants
  ****************************************/
 
 static const int RXPin = 17, TXPin = 2; // GPS transmisson lines
+static const int RX1Pin = 12, TX1Pin = 13; // GPS transmisson lines
 static const uint32_t GPSBaud = 9600; // Default baud rate for NEO-7M GPS module
 
-TinyGPSPlus tinyGPS;  // Create a tinyGPS object
-SoftwareSerial ssGPS(RXPin, TXPin); // Assigns pins to GPS module
-
+#define DHTPIN 22
+#define DHTTYPE DHT22
 #define BAND    915E6  //you can set band here directly,e.g. 868E6 (Europe),915E6 (North America)
 #define BLYNK_PRINT Serial
+#define WIFI_TIMEOUT_MS 20000
 
+ESP32AnalogRead adc;
+DHT dht(DHTPIN, DHTTYPE);
+TinyGPSPlus tinyGPS;  // Create a tinyGPS object
+SoftwareSerial ssGPS(RXPin, TXPin); // Assigns pins to GPS module
+SoftwareSerial sim(RX1Pin, TX1Pin); // Assigns pins to SIM700A module
+WiFiClient client;
+
+int _timeout;
+const unsigned long postingInterval = 120L * 1000L;
 unsigned int counter = 0; // Available for use
+String _buffer;
+String number = ""; //-> change to your number
 String rssi = "RSSI --";  // Signal strength measured in dB
 String packSize = "--";   // Packet size measured in bytes
-String packet ;
+String packet;
 
 /****************************************
  * Main Function Setup
@@ -44,27 +79,35 @@ String packet ;
 
 void setup()
 {
-  Serial.begin(115200);
-  ssGPS.begin(GPSBaud);
-  Serial.println(F("Ublox NEO-7M GPS Module Test"));
-  delay(1000);
+    Serial.begin(115200);
+    Serial.println(F("Ublox NEO-7M GPS Module Test"));
+    delay(1000);
 
-   //WIFI Kit series V1 not support Vext control
-  Heltec.begin(true /*DisplayEnable Enable*/, true /*Heltec.Heltec.Heltec.LoRa Disable*/, true /*Serial Enable*/, true /*PABOOST Enable*/, BAND /*long BAND*/);
-  Heltec.display->init();
-  Heltec.display->flipScreenVertically();  
-  Heltec.display->setFont(ArialMT_Plain_10);
-  
-  // Display images called from the "image.h" header file
-  logo();         // This is only for looks and not necessary. Can be commented out?
-  delay(1500);
-  Heltec.display->clear(); 
-  Heltec.display->drawString(0, 0, "LoRa32 GPS Pet Locator");
-  Heltec.display->display();
-  delay(1000);
-  
-  // Established wifi connection to access Blynk feature
-  Blynk.begin(auth, ssid, pass);
+    adc.attach(36);
+        
+    //WIFI Kit series V1 not support Vext control
+    Heltec.begin(true /*DisplayEnable Enable*/, true /*Heltec.Heltec.Heltec.LoRa Disable*/, true /*Serial Enable*/, true /*PABOOST Enable*/, BAND /*long BAND*/);
+    Heltec.display->init();
+    Heltec.display->flipScreenVertically();
+    Heltec.display->setFont(ArialMT_Plain_10);
+
+    // Display images called from the "image.h" header file
+    logo();         // This is only for looks and not necessary. Can be commented out?
+    delay(1500);
+    
+    connectToWiFi();
+    ThingSpeak.begin(client);
+    dht.begin();
+    _buffer.reserve(50);
+    ssGPS.begin(GPSBaud);
+
+    // Established wifi connection to access Blynk feature
+    Blynk.begin(auth, SSID, pass);
+       
+    Heltec.display->clear();
+    Heltec.display->drawString(0, 0, "LoRa32 GPS Pet Locator");
+    Heltec.display->display();
+    delay(1500);
 }
 
 /****************************************
@@ -73,137 +116,239 @@ void setup()
 
 void loop()
 {
-  Heltec.display->clear();
-  Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
-  Heltec.display->setFont(ArialMT_Plain_10);
-  
-  // Send GPS data to OLED display
-  gps_OLED();
-  
-  // print position, altitude, speed, time/date, and satellites:
-  printGPSInfo();
+    Heltec.display->clear();
+    Heltec.display->setTextAlignment(TEXT_ALIGN_LEFT);
+    Heltec.display->setFont(ArialMT_Plain_10);
 
-  // "Smart delay" looks for GPS data while the Arduino's not doing anything else
-  smartDelay(1000);
-  
-  // send packet
-  LoRa.beginPacket();
-  
-/*
- * LoRa.setTxPower(txPower,RFOUT_pin);
- * txPower -- 0 ~ 20
- * RFOUT_pin could be RF_PACONFIG_PASELECT_PABOOST or RF_PACONFIG_PASELECT_RFO
- *   - RF_PACONFIG_PASELECT_PABOOST -- LoRa single output via PABOOST, maximum output 20dBm
- *   - RF_PACONFIG_PASELECT_RFO     -- LoRa single output via RFO_HF / RFO_LF, maximum output 14dBm
-*/
-  LoRa.setTxPower(20,RF_PACONFIG_PASELECT_PABOOST);
-  LoRa.print("Lat: " +String(tinyGPS.location.lat(), 6)); // 6-digit accuaracy equates to approx. 3-meters when conditions are clear
-  LoRa.print("Lng: " +String(tinyGPS.location.lng(), 6));
-  LoRa.print("Date: " +String(tinyGPS.date.value()));     // Format: DDMMYYYY
-  LoRa.print("Time: " +String(tinyGPS.time.value()-6E6));     // Numerical value in a 24-hour Format
-  LoRa.endPacket();
-  LoRa.sleep();
-  Blynk.run();  // Automatically run all Blynk functions
+    // Send GPS data to OLED display
+    gps_OLED();
 
-  counter++;                 // Not being used for anything currently
-  digitalWrite(LED, HIGH);   // turn the LED on (HIGH is the voltage level)
-  delay(1000);                       // wait for a second
-  digitalWrite(LED, LOW);    // turn the LED off by making the voltage LOW
-  delay(1000);                       // wait for a second  
+    // print position, altitude, speed, time/date, and satellites:
+    printGPSInfo();
+
+    //DHT Sensor
+    float f = dht.readTemperature(true); /* Automatically converts to Fahrenheit */
+    float c = dht.readTemperature(false); /* reads temperature in Celsius */
+    float h = dht.readHumidity();
+    float hif = dht.computeHeatIndex(f, h, true);  // Compute heat index in Fahrenheit:  
+    float hic = dht.computeHeatIndex(c, h, false);  // Compute heat index in Celsius:  
+    /* Google Map data */
+    float lat_val, lng_val, alt_val, spd_val;
+    lat_val = tinyGPS.location.lat();
+    lng_val = tinyGPS.location.lng();
+    alt_val = tinyGPS.altitude.feet();
+    spd_val = tinyGPS.speed.mph();
+    //Print temp and humidity values to serial monitor for debugging:
+    Serial.print("Temp: ");
+    Serial.print(f);
+    Serial.print("\xC2\xB0 F, ");
+    Serial.print("Temp: ");
+    Serial.print(c);
+    Serial.print("\xC2\xB0 C, ");
+    Serial.print("Humidity: ");
+    Serial.print(h);
+    Serial.print("%, ");
+    Serial.print("Heat Index: ");
+    Serial.print(hif);
+    Serial.println("\xC2\xB0 F, ");
+    delay(2000); //Delay 2 sec.  
+
+    // Check if any reads failed and exit early (to try again):
+    if (isnan(h) || isnan(c) || isnan(f)) { /* isnan means "is not a number" */
+        Serial.println("Failed to read from DHT sensor!");
+        return;
+    }
+
+    /* Publish data to ThingSpeak.com */
+    ThingSpeak.setField(1, f);
+    ThingSpeak.setField(2, h);
+    ThingSpeak.setField(3, hif);
+    ThingSpeak.setField(4, WiFi.RSSI());
+    ThingSpeak.setField(5, lat_val);
+    ThingSpeak.setField(6, lng_val);
+    ThingSpeak.setField(7, alt_val);
+    ThingSpeak.setField(8, spd_val);
+    ThingSpeak.writeFields(CHANNEL_ID, CHANNEL_API_KEY);
+    delay(15000); // ThingSpeak only accepts update every 15 seconds    
+
+    // "Smart delay" looks for GPS data while the Arduino's not doing anything else
+    smartDelay(1000);
+
+    // send packet
+    LoRa.beginPacket();
+
+    /*
+     * LoRa.setTxPower(txPower,RFOUT_pin);
+     * txPower -- 0 ~ 20
+     * RFOUT_pin could be RF_PACONFIG_PASELECT_PABOOST or RF_PACONFIG_PASELECT_RFO
+     *   - RF_PACONFIG_PASELECT_PABOOST -- LoRa single output via PABOOST, maximum output 20dBm
+     *   - RF_PACONFIG_PASELECT_RFO     -- LoRa single output via RFO_HF / RFO_LF, maximum output 14dBm
+    */
+    LoRa.setTxPower(20, RF_PACONFIG_PASELECT_PABOOST);
+    LoRa.print("Lat: " + String(tinyGPS.location.lat(), 6)); // 6-digit accuracy equates to approx. 3-meters when conditions are clear
+    LoRa.print("Lng: " + String(tinyGPS.location.lng(), 6));
+    LoRa.print("Date: " + String(tinyGPS.date.value()));     // Format: DDMMYYYY
+    LoRa.print("Time: " + String(tinyGPS.time.value() - 5E6));     // Numerical value in a 24-hour Format
+    LoRa.endPacket();
+    LoRa.sleep();
+    Blynk.run();  // Automatically run all Blynk functions
+
+    counter++;                 // Not being used for anything currently
+    digitalWrite(LED, HIGH);   // turn the LED on (HIGH is the voltage level)
+    delay(1000);                       // wait for a second
+    digitalWrite(LED, LOW);    // turn the LED off by making the voltage LOW
+    delay(1000);                       // wait for a second  
 }
 
 /****************************************
- * Auxiliar Functions
+ * Auxiliary Functions
  ****************************************/
 
-void logo()                   // Draws logos from the hexadecimal code included in the "image.h" file.
+void connectToWiFi()
 {
-  Heltec.display->clear();
-  Heltec.display->drawXbm(0,5,logo_width,logo_height,logo_bits);
-  Heltec.display->display();
+    Serial.print("Connecting to WiFi");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(SSID, pass);
+
+    unsigned long startAttemptTime = millis();
+
+    /* Keep looping while not connected and have yet timed out */
+    while (WiFi.status() != WL_CONNECTED &&
+        millis() - startAttemptTime < WIFI_TIMEOUT_MS) {
+        Serial.print(".");
+        delay(100);
+    }
+
+    /* Verify WiFi connection, otherwise go to deep sleep */
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Failed!");
+
+        /* To handle this case we can restart the ESP32 (ex: ESP.restart();), go to deep sleep, or retry after a delay... */
+    }
+    else {
+        Serial.print("Connected!");
+        Serial.println(WiFi.localIP());
+    }
+}
+// Draws logos from the hexadecimal code included in the "image.h" file.
+void logo()
+{
+    Heltec.display->clear();
+    Heltec.display->drawXbm(0, 5, logo_width, logo_height, logo_bits);
+    Heltec.display->display();
 }
 
 // Used to send GPS data to OLED display
 void gps_OLED()
-{
-  Heltec.display->clear();
-  Heltec.display->drawString(0, 0,"Lat: " +(String(tinyGPS.location.lat(), 6)));
-  Heltec.display->drawString(0, 10,"Lng: " +String(tinyGPS.location.lng(), 6));
-  Heltec.display->drawString(0, 20,"Date: " +String(tinyGPS.date.month()) +("/")
-  +String(tinyGPS.date.day()) +("/") +String(tinyGPS.date.year()));
-  Heltec.display->drawString(0, 30,"Time: " +String(tinyGPS.time.hour()-6) +(":")
-  +String(tinyGPS.time.minute()) +(":") +String(tinyGPS.time.second()));
-  Heltec.display->display();
+{         
+    //DHT Sensor
+    float f = dht.readTemperature(true); /* Automatically converts to Fahrenheit */
+    float c = dht.readTemperature(false); /* reads temperature in Celsius */
+    float h = dht.readHumidity();
+    float hif = dht.computeHeatIndex(f, h, true);  // Compute heat index in Fahrenheit */  
+    float hic = dht.computeHeatIndex(c, h, false);  // Compute heat index in Celsius */ 
+    
+    
+    Heltec.display->clear();
+    Heltec.display->drawString(0, 0, "Lat: " + (String(tinyGPS.location.lat(), 7)));
+    Heltec.display->drawString(0, 10, "Lng: " + String(tinyGPS.location.lng(), 7));
+    Heltec.display->drawString(0, 20, "Date: " + String(tinyGPS.date.month()) + ("/")
+        + String(tinyGPS.date.day()) + ("/") + String(tinyGPS.date.year()));
+    Heltec.display->drawString(0, 30, "Time: " + String(tinyGPS.time.hour() - 5) + (":")
+        + String(tinyGPS.time.minute()) + (":") + String(tinyGPS.time.second()));
+    Heltec.display->drawString(0, 40, String("Feels like Temp:"));
+    Heltec.display->drawString(80, 40, String(hif) + String("\xC2\xB0 F"));
+    if(adc.readVoltage() <= 2.10){
+     Heltec.display->drawString(0, 50, String("Low Battery Level: ") + String(adc.readVoltage()*2) + String("V")); 
+      }
+      else{
+    Heltec.display->drawString(0, 50, String("Battery Level: ") + String(adc.readVoltage()*2) + String("V"));}
+    Heltec.display->display();
 }
 
 void printGPSInfo()
-{
-  // Print latitude, longitude, date, time
-  Serial.print("Lat: "); Serial.println(tinyGPS.location.lat(), 6);
-  Serial.print("Long: "); Serial.println(tinyGPS.location.lng(), 6);
-  Serial.print("Date: "); printDate();  // function details below
-  Serial.print("Time: "); printTime();  // function details below 
-  Serial.println();
+{       
+    // Print latitude, longitude, date, time
+    Serial.print("Lat: "); Serial.println(tinyGPS.location.lat(), 7);
+    Serial.print("Long: "); Serial.println(tinyGPS.location.lng(), 7);
+    Serial.print("Date: "); printDate();  // function details below
+    Serial.print("Time: "); printTime();  // function details below 
+    Serial.println();
+    if(adc.readVoltage() <= 2.10){Serial.println("Low Battery Level: " + String(adc.readVoltage()*2) + String("V"));} 
+    else{Serial.println("Battery Level: " + String(adc.readVoltage()*2) + String("V"));}
 }
 
 // This custom version of delay() ensures that the tinyGPS object
-// is being "fed". From the TinyGPS++ examples.
+// is being "fed" From the TinyGPS++ examples.
 static void smartDelay(unsigned long ms)
 {
-  unsigned long start = millis();
-  do
-  {
-    // If data has come in from the GPS module
-    while (ssGPS.available())
-      tinyGPS.encode(ssGPS.read()); // Send it to the encode function
-    // tinyGPS.encode(char) continues to "load" the tinyGPS object with new
-    // data coming in from the GPS module. As full NMEA strings begin to come in
-    // the tinyGPS library will be able to start parsing them for pertinent info
-  } while (millis() - start < ms);
+    unsigned long start = millis();
+    do
+    {
+        // If data has come in from the GPS module
+        while (ssGPS.available())
+            tinyGPS.encode(ssGPS.read()); // Send it to the encode function
+          // tinyGPS.encode(char) continues to "load" the tinyGPS object with new
+          // data coming in from the GPS module. As full NMEA strings begin to come in
+          // the tinyGPS library will be able to start parsing them for pertinent info
+    } while (millis() - start < ms);
 }
 
 // printDate() formats the date into mm/dd/yy.
 void printDate()
 {
-  Serial.print(tinyGPS.date.month());
-  Serial.print("/");
-  Serial.print(tinyGPS.date.day());
-  Serial.print("/");
-  Serial.println(tinyGPS.date.year());
+    Serial.print(tinyGPS.date.month());
+    Serial.print("/");
+    Serial.print(tinyGPS.date.day());
+    Serial.print("/");
+    Serial.println(tinyGPS.date.year());
 }
 
 // printTime() formats the time into "hh:mm:ss", and prints leading 0's
 // where they're called for.
 void printTime()
 {
-  Serial.print(tinyGPS.time.hour()-8);
-  Serial.print(":");
-  if (tinyGPS.time.minute() < 10) Serial.print('0');
-  Serial.print(tinyGPS.time.minute());
-  Serial.print(":");
-  if (tinyGPS.time.second() < 10) Serial.print('0');
-  Serial.println(tinyGPS.time.second());
+    Serial.print(tinyGPS.time.hour() - 6);
+    Serial.print(":");
+    if (tinyGPS.time.minute() < 10) Serial.print('0');
+    Serial.print(tinyGPS.time.minute());
+    Serial.print(":");
+    if (tinyGPS.time.second() < 10) Serial.print('0');
+    Serial.println(tinyGPS.time.second());
+}
+
+WidgetMap myMap(V0);
+
+BLYNK_WRITE(V0){
+    // If you want to remove all points:
+  //myMap.clear();
+
+  int index = 1;
+  float lat = tinyGPS.location.lat();
+  float lon = tinyGPS.location.lng();
+  myMap.location(index, lat, lon, "value");
 }
 
 // Writes GPS data to virtual pin V1 of Blynk the interface.
 BLYNK_WRITE(V1) {
-//  GpsParam gps(param);
+    //  GpsParam gps(param);
 
-  // Print 6 decimal places for Lat, Lon
-  Serial.print("Lat: ");
-  Serial.println(tinyGPS.location.lat(), 7);
+  
+      // Print 6 decimal places for Lat, Lon
+    Serial.print("Lat: ");
+    Serial.println(tinyGPS.location.lat(), 7);
 
-  Serial.print("Lon: ");
-  Serial.println(tinyGPS.location.lng(), 7);
+    Serial.print("Lon: ");
+    Serial.println(tinyGPS.location.lng(), 7);
 
-  // Print 2 decimal places for Alt, Speed
-  Serial.print("Altitute: ");
-  Serial.println(tinyGPS.altitude.feet(), 2);
+    // Print 2 decimal places for Alt, Speed
+    Serial.print("Altitude: ");
+    Serial.println(tinyGPS.altitude.feet(), 2);
 
-  Serial.print("Speed: ");
-  Serial.println(tinyGPS.speed.mph(), 2);
+    Serial.print("Speed: ");
+    Serial.println(tinyGPS.speed.mph(), 2);
 
-  Serial.println();
+    Serial.println();
 }
 
 /****************************************
