@@ -8,10 +8,8 @@
 #include "images.h"
 #include "ThingSpeak.h"
 #include <BlynkSimpleEsp32.h>
-#include <driver/adc.h>
 #include <Ethernet.h>
 #include <SoftwareSerial.h>
-#include <SPI.h>
 #include <TinyGPS++.h>
 //#include <TinyGsmClient.h>
 #include <WiFi.h>
