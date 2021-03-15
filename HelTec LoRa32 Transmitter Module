@@ -48,7 +48,7 @@ const int port = 80;                        // server port number
  ****************************************/
 
 static const int RXPin = 17, TXPin = 2; // GPS transmisson lines
-static const int RX1Pin = 12, TX1Pin = 13; // GPS transmisson lines
+static const int RX1Pin = 12, TX1Pin = 13; // GSM transmisson lines
 static const uint32_t GPSBaud = 9600; // Default baud rate for NEO-7M GPS module
 
 #define DHTPIN 22
