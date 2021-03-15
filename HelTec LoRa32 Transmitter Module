@@ -11,7 +11,7 @@
 #include <Ethernet.h>
 #include <SoftwareSerial.h>
 #include <TinyGPS++.h>
-//#include <TinyGsmClient.h>
+#include <TinyGsmClient.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 
