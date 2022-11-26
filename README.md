@@ -8,5 +8,5 @@ List of Components:\
   Sensor = DHT22\
   GSM = SIM800L\
   MCU = Heltec LoRa32 V2\
-  API = ThingSPeak\
+  API = ThingSpeak.com\
   4G Sim card = Hologram.io
